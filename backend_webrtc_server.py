@@ -1,4 +1,3 @@
-# backend_webrtc_server.py
 import asyncio
 import os
 import json
@@ -145,8 +144,6 @@ class AudioFileRecorder:
         if self._record_task:
             self._record_task.cancel()
 
-    
-
 # ======================================================
 # Hàm xử lý phản hồi
 # ======================================================
@@ -208,6 +205,22 @@ async def _process_audio_and_respond(session_id, dm_processor, pc, data_channel,
             tts = gTTS(fallback_text, lang="vi")
             tts.save(output_file_path)
             log_info(f"[{session_id}] ⚠️ Dùng gTTS fallback tạo file: {output_file_name}", "yellow")
+
+        # ✅ THÊM MỚI: Lưu toàn bộ phản hồi ra file JSON
+        try:
+            response_json_path = os.path.join("temp", f"{session_id}_response.json")
+            response_content = {
+                "session_id": session_id,
+                "input_file": record_file,
+                "output_audio": output_file_path,
+                "text_response": text_data,
+                "status": "success"
+            }
+            with open(response_json_path, "w", encoding="utf-8") as jf:
+                json.dump(response_content, jf, ensure_ascii=False, indent=4)
+            log_info(f"[{session_id}] 💾 Xuất file JSON phản hồi: {response_json_path}", "cyan")
+        except Exception as e:
+            log_info(f"[{session_id}] ⚠️ Lỗi khi ghi JSON phản hồi: {e}", "yellow")
 
         if data_channel.readyState == 'open':
             final_response = {
