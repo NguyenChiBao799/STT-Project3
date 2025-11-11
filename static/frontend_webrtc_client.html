@@ -168,7 +168,8 @@
             
             sessionId = crypto.randomUUID();
             pc = new RTCPeerConnection();
-            
+        
+
             // 1. Khởi tạo WebSocket cho phiên mới
             initWebSocket(pc, sessionId); 
             
@@ -245,6 +246,30 @@
             ttsAudio.src = audioPath;
             ttsAudio.load(); 
 
+            function exportResponseJSON(sessionId, userText, botText, audioPath) {
+                try {
+                    const data = {
+                        session_id: sessionId,
+                        timestamp: new Date().toISOString(),
+                        user_text: userText || "",
+                        bot_text: botText || "",
+                        audio_path: audioPath || "",
+                        status: "success"
+                    };
+                    const blob = new Blob([JSON.stringify(data, null, 4)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = `${sessionId}_frontend_response.json`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    log(`💾 Đã xuất file JSON phản hồi (${sessionId}_frontend_response.json).`, "status");
+                } catch (err) {
+                    log(`⚠️ Lỗi khi tạo file JSON: ${err.message}`, "error");
+                }
+            }
+
             // FIX LỖI AUTOPLAY: Sử dụng PlayPromise
             const playPromise = ttsAudio.play();
             
@@ -285,7 +310,7 @@
                     updateStatus('✅ Xử lý hoàn tất. Đang phát audio...', 100);
                     if (data.bot_audio_path) {
                         log(`[TTS] Đã nhận đường dẫn file: ${data.bot_audio_path}`);
-                        playFinalAudio(data.bot_audio_path); // Chơi file từ đường dẫn
+                        playFinalAudio(data.bot_audio_path); ttsAudio.play();// Chơi file từ đường dẫn
                     } else {
                          log('[TTS] ⚠️ Hoàn tất phiên nhưng không có file audio phản hồi.', 'warning');
                          resetUI(true);
@@ -296,7 +321,7 @@
                     updateStatus('❌ Lỗi Server. Vui lòng thử lại.', 0);
                     resetUI(true);
                 }
-
+            
             } catch (e) {
                 log(`Lỗi phân tích JSON từ Data Channel: ${e.message}`, 'error');
             }
@@ -498,7 +523,10 @@
         if (!navigator.mediaDevices || !RTCPeerConnection) {
             alert("Trình duyệt không hỗ trợ WebRTC.");
         }
-
+            // ✅ Tự động xuất file JSON (frontend)
+            const userText = textOutputDiv.querySelector('.user-text').innerText.replace('Người dùng:', '').trim();
+            const botText = textOutputDiv.querySelector('.bot-text').innerText.replace('Bot:', '').trim();
+            exportResponseJSON(sessionId, userText, botText, data.bot_audio_path);
         
 
     </script>
