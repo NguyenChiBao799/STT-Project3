@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tạo mã QR thanh toán</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f9f9ff;
+      padding: 40px;
+      color: #333;
+    }
+    .container {
+      background-color: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      max-width: 500px;
+      margin: auto;
+      padding: 25px;
+    }
+    h2 {
+      text-align: center;
+      color: #1a73e8;
+    }
+    label {
+      font-weight: 600;
+      margin-top: 10px;
+      display: block;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      margin-top: 5px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .btn {
+      width: 100%;
+      padding: 12px;
+      margin-top: 20px;
+      font-size: 16px;
+      font-weight: bold;
+      color: white;
+      background-color: #1a73e8;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+    .btn:hover {
+      background-color: #0f5bcc;
+    }
+    .debug {
+      width: 100%;
+      padding: 10px;
+      background-color: #ffcc00;
+      border: none;
+      border-radius: 6px;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+    .qr-container {
+      margin-top: 25px;
+      text-align: center;
+    }
+    img {
+      margin-top: 15px;
+      max-width: 250px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h2>🧾 Tạo mã QR thanh toán</h2>
+
+    <form id="paymentForm">
+      <label>Số tiền (VND)</label>
+      <input type="number" id="amount" placeholder="Nhập số tiền" required>
+
+      <label>Nội dung thanh toán</label>
+      <input type="text" id="description" placeholder="VD: Thanh toán hóa đơn #123" required>
+
+      <label>Thông tin khách hàng (tùy chọn)</label>
+      <input type="text" id="customer" placeholder="VD: Nguyễn Văn A - 0901234567">
+
+      <label>Cổng thanh toán</label>
+      <select id="gateway">
+        <option value="QRCODE">QR Code</option>
+      </select>
+
+      <button type="submit" class="btn">Tạo mã QR / Link</button>
+      <button type="button" id="debugBtn" class="debug">🐞 Debug: Test API Call</button>
+    </form>
+
+    <div class="qr-container" id="qrResult"></div>
+  </div>
+
+  <script>
+    const apiBase = window.location.origin + '/api/payment/create';
+
+    document.getElementById('paymentForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const amount = document.getElementById('amount').value;
+      const description = document.getElementById('description').value;
+      const customer = document.getElementById('customer').value;
+      const gateway = document.getElementById('gateway').value;
+
+      const url = `${apiBase}?amount=${amount}&description=${encodeURIComponent(description)}&customer_info=${encodeURIComponent(customer)}&gateway=${gateway}`;
+      console.log("Calling:", url);
+
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Lỗi kết nối API');
+        const data = await res.json();
+
+        document.getElementById('qrResult').innerHTML = `
+          <p><b>Mã đơn hàng:</b> ${data.order_id}</p>
+          <p><b>Nội dung:</b> ${data.description}</p>
+          <p><b>Số tiền:</b> ${data.amount.toLocaleString()} VND</p>
+          <img src="${data.qr_url}" alt="QR Code Thanh Toán">
+        `;
+      } catch (err) {
+        alert("❌ Lỗi: " + err.message);
+      }
+    });
+
+    document.getElementById('debugBtn').addEventListener('click', async () => {
+      const res = await fetch('/api/payment/test');
+      const data = await res.json();
+      alert(JSON.stringify(data, null, 2));
+    });
+  </script>
+</body>
+</html>

@@ -1,68 +1,118 @@
-# config_db.py
 import os
-import uuid
-
-try:
-    import pyttsx3
-except Exception:
-    pyttsx3 = None
+import sqlite3
+from pathlib import Path
 
 # ======================================================
 # CLASS CẤU HÌNH TỔNG HỢP: ConfigDB
 # ======================================================
 class ConfigDB:
-    # --- API KEYS & MODES ---
-    # API Key mặc định, sẽ được ghi đè bằng giá trị từ Frontend (WebRTC)
-    API_KEY = os.environ.get("YOUR_API_KEY_ENV_VAR", "MOCK_API_KEY") 
-    
-    # CHẾ ĐỘ XỬ LÝ (MOCK/LLM/WHISPER/API)
-    NLU_MODE_DEFAULT = "MOCK"      
-    ASR_MODE_DEFAULT = "WHISPER"   
-    LLM_MODE_DEFAULT = "MOCK"   
-    DB_MODE_DEFAULT = "MOCK"
-    TTS_MODE_DEFAULT = "MOCK"     
-    
-    # Cài đặt LLM
-    GEMINI_MODEL = "gemini-2.5-flash" 
-    
-    TTS_VOICE_NAME_DEFAULT = "vi-VN-Standard-A"
+    # --- CẤU HÌNH CHUNG CỦA DỰ ÁN ---
+    PROJECT_NAME = "STT Project - Payment System"
+    DB_NAME = "payment.db"
+    DB_FOLDER = "core"
+    DB_PATH = os.path.join(DB_FOLDER, DB_NAME)
 
-    # --- CONFIG ASR/NLU ---
-    WHISPER_MODEL_NAME = "small"
-    NLU_CONFIDENCE_THRESHOLD = 0.6 
-    
-    # --- CONFIG AUDIO IO ---
-    SAMPLE_RATE = 16000 # 16kHz
-    
-    # --- CONFIG DIALOG MANAGER ---
-    INITIAL_STATE = "START" 
-    SCENARIOS_CONFIG = { 
-        "rules": [
-            {"intent": "chao_hoi", "responses": ["Chào bạn, tôi là trợ lý ảo. Bạn cần hỗ trợ gì?", "Xin chào! Tôi có thể giúp gì cho bạn hôm nay?"]},
-            {"intent": "no_match", "response": "Xin lỗi, tôi chưa hiểu rõ ý bạn. Bạn có thể nói rõ hơn không?"}
-        ]
-    }
-    
-    # Giả lập dữ liệu DB / State
-    STATE_CONFIG = {"START": {"transitions": []}}
-    PRIORITY_RULES = []
+    # --- CẤU HÌNH KẾT NỐI SQLITE ---
+    SQLITE_PRAGMA_SETTINGS = [
+        ("journal_mode", "WAL"),       # Ghi nhật ký WAL để tăng tốc
+        ("synchronous", "NORMAL"),     # Giảm độ trễ I/O
+        ("temp_store", "MEMORY"),      # Tạm lưu trong RAM
+    ]
+
+    # --- CẤU HÌNH BẢNG CƠ BẢN ---
+    PAYMENT_TABLE_NAME = "payments"
+    TABLE_SCHEMA = f"""
+        CREATE TABLE IF NOT EXISTS {PAYMENT_TABLE_NAME} (
+            order_id TEXT PRIMARY KEY,
+            amount INTEGER NOT NULL,
+            description TEXT NOT NULL,
+            customer_info TEXT,
+            status TEXT DEFAULT 'PENDING',
+            qr_path TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """
+
+    # --- CẤU HÌNH MẶC ĐỊNH CHO QR PAYMENT ---
+    QR_STORAGE_DIR = "static/payments"
+    QR_FILE_EXTENSION = ".png"
+    QR_TEXT_TEMPLATE = (
+        "Thanh toán đơn hàng: {order_id}\n"
+        "Số tiền: {amount:,} VND\n"
+        "Nội dung: {description}\n"
+        "Khách hàng: {customer_info}"
+    )
+
+    # --- CẤU HÌNH LOGGING ---
+    LOG_FILE_PATH = os.path.join(DB_FOLDER, "payment.log")
+    ENABLE_CONSOLE_LOG = True
 
 
 # ======================================================
-# HẰNG SỐ DỰ ÁN (EXPORTING FOR DIRECT IMPORT)
+# HÀM KHỞI TẠO VÀ QUẢN LÝ DATABASE
 # ======================================================
-API_KEY = ConfigDB.API_KEY 
-GEMINI_MODEL = ConfigDB.GEMINI_MODEL
-LLM_MODE_DEFAULT = ConfigDB.LLM_MODE_DEFAULT 
-NLU_MODE_DEFAULT = ConfigDB.NLU_MODE_DEFAULT
-DB_MODE_DEFAULT = ConfigDB.DB_MODE_DEFAULT
-ASR_MODE_DEFAULT = ConfigDB.ASR_MODE_DEFAULT
-TTS_MODE_DEFAULT = ConfigDB.TTS_MODE_DEFAULT
-TTS_VOICE_NAME_DEFAULT = ConfigDB.TTS_VOICE_NAME_DEFAULT
 
-NLU_CONFIDENCE_THRESHOLD = ConfigDB.NLU_CONFIDENCE_THRESHOLD
-WHISPER_MODEL_NAME = ConfigDB.WHISPER_MODEL_NAME
-SAMPLE_RATE = ConfigDB.SAMPLE_RATE
+def init_db():
+    """
+    Khởi tạo cơ sở dữ liệu SQLite và bảng thanh toán.
+    Nếu DB hoặc bảng chưa tồn tại, tự động tạo mới.
+    """
+    os.makedirs(ConfigDB.DB_FOLDER, exist_ok=True)
+    conn = sqlite3.connect(ConfigDB.DB_PATH)
+    c = conn.cursor()
+    c.execute(ConfigDB.TABLE_SCHEMA)
+    conn.commit()
 
-SCENARIOS_CONFIG = ConfigDB.SCENARIOS_CONFIG
-INITIAL_STATE = ConfigDB.INITIAL_STATE
+    # Áp dụng các thiết lập PRAGMA để tối ưu
+    for key, value in ConfigDB.SQLITE_PRAGMA_SETTINGS:
+        try:
+            c.execute(f"PRAGMA {key}={value}")
+        except Exception as e:
+            if ConfigDB.ENABLE_CONSOLE_LOG:
+                print(f"[ConfigDB] ⚠️ PRAGMA {key} lỗi: {e}")
+
+    conn.close()
+    if ConfigDB.ENABLE_CONSOLE_LOG:
+        print(f"[ConfigDB] ✅ Database sẵn sàng tại: {ConfigDB.DB_PATH}")
+
+
+def get_connection():
+    """
+    Lấy kết nối SQLite đang hoạt động.
+    Đảm bảo DB được khởi tạo trước khi mở kết nối.
+    """
+    init_db()
+    return sqlite3.connect(ConfigDB.DB_PATH)
+
+
+# ======================================================
+# HÀM GHI LOG (CHO QR PAYMENT)
+# ======================================================
+
+def log_event(message: str):
+    """
+    Ghi log ra file và console (nếu bật).
+    """
+    from datetime import datetime
+    os.makedirs(os.path.dirname(ConfigDB.LOG_FILE_PATH), exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_line = f"[{timestamp}] {message}\n"
+    with open(ConfigDB.LOG_FILE_PATH, "a", encoding="utf-8") as f:
+        f.write(log_line)
+    if ConfigDB.ENABLE_CONSOLE_LOG:
+        print(log_line.strip())
+
+
+# ======================================================
+# HẰNG SỐ XUẤT KHẨU (EXPORTING FOR DIRECT IMPORT)
+# ======================================================
+PROJECT_NAME = ConfigDB.PROJECT_NAME
+DB_PATH = ConfigDB.DB_PATH
+DB_NAME = ConfigDB.DB_NAME
+DB_FOLDER = ConfigDB.DB_FOLDER
+PAYMENT_TABLE_NAME = ConfigDB.PAYMENT_TABLE_NAME
+QR_STORAGE_DIR = ConfigDB.QR_STORAGE_DIR
+QR_FILE_EXTENSION = ConfigDB.QR_FILE_EXTENSION
+QR_TEXT_TEMPLATE = ConfigDB.QR_TEXT_TEMPLATE
+LOG_FILE_PATH = ConfigDB.LOG_FILE_PATH
+ENABLE_CONSOLE_LOG = ConfigDB.ENABLE_CONSOLE_LOG
