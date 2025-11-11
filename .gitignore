@@ -1,0 +1,53 @@
+# ===============================
+# PYTHON / FASTAPI BACKEND IGNORE
+# ===============================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Local settings
+*.env
+.env.*
+
+# Logs
+*.log
+
+# Audio temp files
+temp/
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.webm
+
+# Build / cache
+build/
+dist/
+*.egg-info/
+
+# IDE / editor folders
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Torch / Whisper cache
+~/.cache/
+*.pt
+*.pth
+*.bin
+
+# Node / frontend
+node_modules/
+frontend_webrtc_client/node_modules/
+
+# OS / Misc
+*.bak
+*.tmp
