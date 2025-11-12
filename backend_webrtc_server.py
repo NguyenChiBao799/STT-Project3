@@ -4,41 +4,47 @@ import json
 import uuid
 import wave
 import numpy as np
+import librosa  # ✅ Dùng để resample
+import warnings
 from typing import Dict, Any, Optional, Callable
 from pathlib import Path
 import traceback 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, UploadFile, File, Form
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse # ✅ BỔ SUNG: Import JSONResponse cho xử lý lỗi
 from fastapi.middleware.cors import CORSMiddleware
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCDataChannel, MediaStreamTrack, RTCConfiguration, RTCIceServer
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
 from aiortc.exceptions import InvalidStateError
 from routers import products, orders, promotions, payment
 from ai_modules.rtc_integration_layer import RTCStreamProcessor, SAMPLE_RATE, INTERNAL_API_KEY
 import base64
-from gtts import gTTS  # ✅ Thêm để fallback phản hồi giọng nói
+from gtts import gTTS
 
-# --- Import RTCStreamProcessor ---
-try:
-    from ai_modules.rtc_integration_layer import RTCStreamProcessor, SAMPLE_RATE, INTERNAL_API_KEY 
-except ImportError:
-    class RTCStreamProcessor:
-        def __init__(self, *args, **kwargs): pass
-        async def handle_rtc_session(self, *args, **kwargs): 
-            yield (False, {"user_text": "LỖI: RTCStreamProcessor không import được.", "bot_text": "Lỗi hệ thống nội bộ."})
-    SAMPLE_RATE = 16000
-    INTERNAL_API_KEY = "MOCK_INTERNAL_KEY" 
+# ============================================================
+# 🔧 FIX CHO LỖI "Transaction.__retry()" TRONG AIORTC/AIOICE
+# ============================================================
+import aioice
+aioice.stun.TRANSACTION_RETRY_INTERVAL = 2.0
+aioice.stun.TRANSACTION_MAX_RETRIES = 4
 
-# --- Cấu hình ---
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid state")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="coroutine.*was never awaited")
+
+# ============================================================
+# CẤU HÌNH CHUNG
+# ============================================================
 CHANNELS = 1
 SAMPLE_WIDTH = 2
 os.makedirs("temp", exist_ok=True)
-ICE_SERVERS = [{"urls": "stun:stun.l.google.com:19302"}]
+
+ICE_SERVERS = [
+    {"urls": "stun:stun1.l.google.com:19302"},
+    {"urls": "stun:stun2.l.google.com:19302"},
+    {"urls": "stun:stun3.l.google.com:19302"},
+]
+
 processing_tasks: Dict[str, asyncio.Task] = {}
 
-# ======================================================
-# Tạo ứng dụng FastAPI chính
-# ======================================================
 app = FastAPI(title="STT Voice AI Backend (WebRTC + REST API)")
 
 app.add_middleware(
@@ -54,20 +60,12 @@ app.include_router(orders.router, prefix="/api")
 app.include_router(promotions.router, prefix="/api")
 app.include_router(payment.router, prefix="/api")
 
-# ======================================================
-# Logging
-# ======================================================
+# ============================================================
+# UTILITIES
+# ============================================================
 def log_info(message: str, color="white"):
-    color_map = {
-        "red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m", 
-        "blue": "\033[94m", "magenta": "\033[95m", "cyan": "\033[96m", "white": "\033[97m"
-    }
-    RESET = "\033[0m"
-    print(f"{color_map.get(color, RESET)}INFO:backend_webrtc_server:[{message}]{RESET}", flush=True)
+    print(f"INFO:backend_webrtc_server:[{message}]")
 
-# ======================================================
-# WAV Writer Helper
-# ======================================================
 def _write_wav_file_safe_helper(file_path_str: str, chunks: list[bytes], wav_params_tuple: tuple):
     with wave.open(file_path_str, 'wb') as wf:
         wf.setparams(wav_params_tuple)
@@ -77,9 +75,9 @@ def _write_wav_file_safe_helper(file_path_str: str, chunks: list[bytes], wav_par
 
 WAV_PARAMS = (CHANNELS, SAMPLE_WIDTH, SAMPLE_RATE, 0, 'NONE', 'not compressed')
 
-# ======================================================
-# AudioFileRecorder Class
-# ======================================================
+# ============================================================
+# CLASS GHI ÂM AUDIO
+# ============================================================
 class AudioFileRecorder:
     def __init__(self, pc):
         self._pc = pc
@@ -96,45 +94,51 @@ class AudioFileRecorder:
         self._stop_event.clear()
         self._chunks = []
         self._record_task = asyncio.create_task(self._read_track_and_write()) 
-        log_info(f"[Recorder] Bắt đầu ghi âm: {self._file_path.name}")
+        log_info(f"[Recorder] ▶️ Bắt đầu ghi âm: {self._file_path.name}")
 
     def on(self, event: str, callback: Callable):
         if event == "stop":
             self._on_stop_callback = callback
-
-    def _get_wav_params_tuple(self):
-        return WAV_PARAMS
 
     async def _read_track_and_write(self):
         try:
             while not self._stop_event.is_set():
                 try:
                     packet = await self._track.recv()
-                    audio_data_np = packet.to_ndarray() 
+                    audio_data_np = packet.to_ndarray()
+
                     if audio_data_np.dtype == np.float32:
                         audio_data_np = (audio_data_np * 32767).astype(np.int16)
                     elif audio_data_np.dtype != np.int16:
                         audio_data_np = audio_data_np.astype(np.int16)
+
+                    if len(audio_data_np.shape) > 1:
+                        audio_data_np = np.mean(audio_data_np, axis=1)
+
+                    audio_data_np = librosa.resample(audio_data_np.astype(np.float32), orig_sr=48000, target_sr=16000)
+                    audio_data_np = (audio_data_np * 32767).astype(np.int16)
+
                     self._chunks.append(audio_data_np.tobytes())
+
                 except InvalidStateError:
                     break
                 except Exception as e:
                     if not self._stop_event.is_set():
-                        log_info(f"[Recorder] Lỗi nhận packet audio: {e}", "red")
+                        log_info(f"[Recorder] Lỗi nhận packet audio: {e}")
                     break
         except asyncio.CancelledError:
-            log_info(f"[Recorder] Task đọc track bị hủy.")
+            log_info(f"[Recorder] 🛑 Task đọc track bị hủy.")
         finally:
             if not self._chunks:
                 if self._on_stop_callback and self._file_path:
                     self._on_stop_callback(None)
                 return
             try:
-                await asyncio.to_thread(_write_wav_file_safe_helper, str(self._file_path), self._chunks, self._get_wav_params_tuple())
+                await asyncio.to_thread(_write_wav_file_safe_helper, str(self._file_path), self._chunks, WAV_PARAMS)
                 if self._on_stop_callback:
                     self._on_stop_callback(str(self._file_path))
             except Exception as e:
-                log_info(f"[Recorder] Lỗi ghi file WAV: {e}", "red")
+                log_info(f"[Recorder] ❌ Lỗi ghi file WAV: {e}")
                 if self._on_stop_callback:
                     self._on_stop_callback(None)
 
@@ -144,36 +148,19 @@ class AudioFileRecorder:
         if self._record_task:
             self._record_task.cancel()
 
-# ======================================================
-# Hàm xử lý phản hồi
-# ======================================================
+# ============================================================
+# HÀM XỬ LÝ AUDIO SAU GHI
+# ============================================================
 async def _process_audio_and_respond(session_id, dm_processor, pc, data_channel, record_file, api_key):
-    if data_channel is None:
-        log_info(f"[{session_id}] ❌ Data Channel None", "red")
-        return
-
     try:
-        timeout = 5
-        start_time = asyncio.get_event_loop().time()
-        while data_channel.readyState != 'open':
-            if asyncio.get_event_loop().time() - start_time > timeout:
-                log_info(f"[{session_id}] ❌ Data Channel chưa mở sau {timeout}s.", "red")
-                return
-            await asyncio.sleep(0.1)
-    except Exception as e:
-        log_info(f"[{session_id}] Lỗi khi chờ DC: {e}", "red")
-        return
+        if not record_file or not os.path.exists(record_file):
+            data_channel.send(json.dumps({
+                "type": "error",
+                "error": "Không có dữ liệu audio hoặc file không tồn tại."
+            }))
+            log_info(f"[{session_id}] ⚠️ Bỏ qua: file audio None hoặc không tồn tại.")
+            return
 
-    if not record_file or not os.path.exists(record_file):
-        log_info(f"[{session_id}] ❌ Không có file ghi âm đầu vào", "red")
-        try:
-            data_channel.send(json.dumps({"type": "error", "error": "Không có dữ liệu audio"}))
-        except Exception:
-            pass
-        return
-
-    try:
-        data_channel.send(json.dumps({"type": "start_processing"}))
         stream_generator = dm_processor.handle_rtc_session(
             record_file=Path(record_file),
             session_id=session_id,
@@ -184,82 +171,55 @@ async def _process_audio_and_respond(session_id, dm_processor, pc, data_channel,
         text_data = {}
 
         async for is_audio, data in stream_generator:
-            if data_channel.readyState != 'open':
-                log_info(f"[{session_id}] DC đóng, dừng stream.", "orange")
-                break
             if is_audio:
-                audio_chunks_binary.append(base64.b64decode(data))
+                audio_chunks_binary.append(base64.b64decode(data) if isinstance(data, str) else data)
             else:
                 text_data = data
-                data_channel.send(json.dumps({"type": "text_response_partial", **data}))
+                if data_channel:
+                    data_channel.send(json.dumps({"type": "text_response_partial", **data}))
 
         output_file_name = f"{session_id}_output.wav"
         output_file_path = os.path.join("temp", output_file_name)
 
         if audio_chunks_binary:
             await asyncio.to_thread(_write_wav_file_safe_helper, output_file_path, audio_chunks_binary, WAV_PARAMS)
-            log_info(f"[{session_id}] ✅ Đã ghi file phản hồi từ AI: {output_file_name}", "green")
         else:
-            # ✅ Tạo phản hồi fallback bằng gTTS nếu không có audio từ AI
-            fallback_text = text_data.get("bot_text", "Xin lỗi, tôi chưa có phản hồi giọng nói.")
-            tts = gTTS(fallback_text, lang="vi")
-            tts.save(output_file_path)
-            log_info(f"[{session_id}] ⚠️ Dùng gTTS fallback tạo file: {output_file_name}", "yellow")
+            fallback_text = text_data.get("bot_text", "Xin lỗi, tôi không nghe rõ.")
+            gTTS(fallback_text, lang="vi").save(output_file_path)
 
-        # ✅ THÊM MỚI: Lưu toàn bộ phản hồi ra file JSON
-        try:
-            response_json_path = os.path.join("temp", f"{session_id}_response.json")
-            response_content = {
+        response_json_path = os.path.join("temp", f"{session_id}_response.json")
+        with open(response_json_path, "w", encoding="utf-8") as jf:
+            json.dump({
                 "session_id": session_id,
                 "input_file": record_file,
                 "output_audio": output_file_path,
-                "text_response": text_data,
-                "status": "success"
-            }
-            with open(response_json_path, "w", encoding="utf-8") as jf:
-                json.dump(response_content, jf, ensure_ascii=False, indent=4)
-            log_info(f"[{session_id}] 💾 Xuất file JSON phản hồi: {response_json_path}", "cyan")
-        except Exception as e:
-            log_info(f"[{session_id}] ⚠️ Lỗi khi ghi JSON phản hồi: {e}", "yellow")
+                "text_response": text_data
+            }, jf, ensure_ascii=False, indent=4)
 
-        if data_channel.readyState == 'open':
-            final_response = {
+        if data_channel:
+            data_channel.send(json.dumps({
                 "type": "end_of_session",
                 "bot_audio_path": f"/audio_files/{output_file_name}"
-            }
-            data_channel.send(json.dumps(final_response))
+            }))
 
     except Exception as e:
-        log_info(f"[{session_id}] ❌ Lỗi xử lý chung: {e}", "red")
-        log_info(traceback.format_exc(), "red")
-        try:
-            if data_channel and data_channel.readyState == 'open':
-                data_channel.send(json.dumps({"type": "error", "error": str(e)}))
-        except Exception:
-            pass
+        log_info(f"[{session_id}] ❌ Lỗi xử lý: {e}")
+        traceback.print_exc()
     finally:
-        if os.path.exists(record_file):
-            os.remove(record_file)
-            log_info(f"[{session_id}] ✅ Xóa file ghi âm đầu vào.", "green")
-        if session_id in processing_tasks:
-            del processing_tasks[session_id]
+        log_info(f"[{session_id}] ⚠️ Giữ lại file ghi âm đầu vào: {record_file}")
 
-# ======================================================
-# ROUTES CHÍNH
-# ======================================================
-dm = RTCStreamProcessor(log_callback=log_info)
-
+# ============================================================
+# ENDPOINT /offer
+# ============================================================
 @app.post("/offer")
 async def offer(request: Request):
     params = await request.json()
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
     session_id = params.get("session_id", str(uuid.uuid4()))
-    client_api_key = params.get("api_key", INTERNAL_API_KEY)
+    api_key = params.get("api_key", INTERNAL_API_KEY)
 
-    ice_servers_objects = [RTCIceServer(urls=s["urls"]) for s in ICE_SERVERS]
-    config = RTCConfiguration(iceServers=ice_servers_objects)
+    config = RTCConfiguration(iceServers=[RTCIceServer(urls=s["urls"]) for s in ICE_SERVERS])
     pc = RTCPeerConnection(configuration=config)
-
     recorder = AudioFileRecorder(pc)
     data_channel_holder = None
 
@@ -268,74 +228,89 @@ async def offer(request: Request):
         nonlocal data_channel_holder
         data_channel_holder = channel
 
-        @channel.on("open")
-        def on_open():
-            log_info(f"[{session_id}] ✅ Data Channel mở thành công.")
-
-        @channel.on("close")
-        def on_close():
-            log_info(f"[{session_id}] ❌ Data Channel đã đóng.")
-            if session_id in processing_tasks:
-                processing_tasks[session_id].cancel()
-
         @channel.on("message")
         def on_message(message):
-            if isinstance(message, str):
-                try:
-                    data = json.loads(message)
-                    if data.get("type") == "stop_recording":
-                        recorder.stop()
-                    elif data.get("type") == "cancel_processing":
-                        if session_id in processing_tasks:
-                            processing_tasks[session_id].cancel()
-                            log_info(f"[{session_id}] Hủy xử lý theo yêu cầu.", "orange")
-                except Exception:
-                    pass
+            data = json.loads(message)
+            if data.get("type") == "stop_recording":
+                recorder.stop()
 
     @pc.on("track")
     def on_track(track):
         if track.kind == "audio":
             path = os.path.join("temp", f"{session_id}_input.wav")
             recorder.start(track, path)
-
-            def on_stop(saved_path):
-                nonlocal data_channel_holder
-                if not data_channel_holder:
-                    log_info(f"[{session_id}] ❌ Không có data_channel.", "red")
-                    return
-                if not saved_path:
-                    log_info(f"[{session_id}] ❌ Ghi âm thất bại.", "red")
-                    return
-
-                task = asyncio.create_task(
-                    _process_audio_and_respond(session_id, dm, pc, data_channel_holder, saved_path, client_api_key)
-                )
-                processing_tasks[session_id] = task
-
-            recorder.on("stop", on_stop)
+            recorder.on("stop", lambda p: asyncio.create_task(
+                _process_audio_and_respond(session_id, RTCStreamProcessor(log_callback=log_info),
+                                           pc, data_channel_holder, p, api_key)
+            ))
 
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
     return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, session_id: str = "default_session"):
-    await websocket.accept()
+# ============================================================
+# 📂 ENDPOINT: UPLOAD WAV FILE
+# ============================================================
+@app.post("/api/upload_wav")
+async def upload_wav(file: UploadFile = File(...), api_key: str = Form(None)):
+    """
+    📂 Endpoint: Tải file WAV lên để backend phân tích.
+    """
     try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+        os.makedirs("temp", exist_ok=True)
+        session_id = str(uuid.uuid4())
+        temp_path = os.path.join("temp", f"{session_id}_uploaded.wav")
 
-# ======================================================
-# Static files
-# ======================================================
+        with open(temp_path, "wb") as f:
+            f.write(await file.read())
+
+        log_info(f"[UPLOAD] ✅ Đã nhận file: {file.filename} → {temp_path}")
+
+        dm_processor = RTCStreamProcessor(log_callback=log_info)
+        stream_gen = dm_processor.handle_rtc_session(
+            record_file=Path(temp_path),
+            session_id=session_id,
+            api_key=api_key or INTERNAL_API_KEY,
+        )
+
+        text_data = {}
+        audio_chunks = []
+
+        async for is_audio, data in stream_gen:
+            if is_audio:
+                audio_chunks.extend(data)
+            else:
+                text_data = data
+
+        output_file = os.path.join("temp", f"{session_id}_output.wav")
+        if audio_chunks:
+            await asyncio.to_thread(_write_wav_file_safe_helper, output_file, audio_chunks, WAV_PARAMS)
+
+        response = {
+            "session_id": session_id,
+            "user_text": text_data.get("user_text", ""),
+            "bot_text": text_data.get("bot_text", ""),
+            "bot_audio_path": f"/audio_files/{Path(output_file).name}" if os.path.exists(output_file) else None,
+        }
+
+        log_info(f"[UPLOAD] ✅ Phân tích xong: {response['bot_text']}")
+        return JSONResponse(response)
+
+    except Exception as e:
+        log_info(f"[UPLOAD] ❌ Lỗi xử lý file WAV: {e}")
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# ============================================================
+# STATIC ROUTES
+# ============================================================
 app.mount("/audio_files", StaticFiles(directory="temp"), name="audio_files")
 app.mount("/", StaticFiles(directory="static"), name="static")
 
+# ============================================================
+# MAIN ENTRY
+# ============================================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
