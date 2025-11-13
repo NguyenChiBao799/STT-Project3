@@ -18,6 +18,7 @@ class ConfigDB:
         ("synchronous", "NORMAL"),     # Giảm độ trễ I/O
         ("temp_store", "MEMORY"),      # Tạm lưu trong RAM
     ]
+    
 
     # --- CẤU HÌNH BẢNG CƠ BẢN ---
     PAYMENT_TABLE_NAME = "payments"
@@ -63,7 +64,7 @@ def init_db():
     c.execute(ConfigDB.TABLE_SCHEMA)
     conn.commit()
 
-    # Áp dụng các thiết lập PRAGMA để tối ưu
+    # Áp dụng thiết lập PRAGMA
     for key, value in ConfigDB.SQLITE_PRAGMA_SETTINGS:
         try:
             c.execute(f"PRAGMA {key}={value}")
@@ -79,40 +80,110 @@ def init_db():
 def get_connection():
     """
     Lấy kết nối SQLite đang hoạt động.
-    Đảm bảo DB được khởi tạo trước khi mở kết nối.
+    Đảm bảo DB được khởi tạo trước.
     """
     init_db()
     return sqlite3.connect(ConfigDB.DB_PATH)
 
 
 # ======================================================
-# HÀM GHI LOG (CHO QR PAYMENT)
+# LOG EVENT
 # ======================================================
-
 def log_event(message: str):
     """
-    Ghi log ra file và console (nếu bật).
+    Ghi log ra file và console.
     """
     from datetime import datetime
     os.makedirs(os.path.dirname(ConfigDB.LOG_FILE_PATH), exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_line = f"[{timestamp}] {message}\n"
+    line = f"[{timestamp}] {message}\n"
+
     with open(ConfigDB.LOG_FILE_PATH, "a", encoding="utf-8") as f:
-        f.write(log_line)
+        f.write(line)
+
     if ConfigDB.ENABLE_CONSOLE_LOG:
-        print(log_line.strip())
+        print(line.strip())
 
 
 # ======================================================
-# HẰNG SỐ XUẤT KHẨU (EXPORTING FOR DIRECT IMPORT)
+# CONFIG NLU / DM / RESPONSE / SYSTEM / DB
 # ======================================================
-PROJECT_NAME = ConfigDB.PROJECT_NAME
-DB_PATH = ConfigDB.DB_PATH
-DB_NAME = ConfigDB.DB_NAME
-DB_FOLDER = ConfigDB.DB_FOLDER
-PAYMENT_TABLE_NAME = ConfigDB.PAYMENT_TABLE_NAME
-QR_STORAGE_DIR = ConfigDB.QR_STORAGE_DIR
-QR_FILE_EXTENSION = ConfigDB.QR_FILE_EXTENSION
-QR_TEXT_TEMPLATE = ConfigDB.QR_TEXT_TEMPLATE
-LOG_FILE_PATH = ConfigDB.LOG_FILE_PATH
-ENABLE_CONSOLE_LOG = ConfigDB.ENABLE_CONSOLE_LOG
+# ============================================================
+# SCENARIOS CONFIG (kịch bản hội thoại)
+# ============================================================
+SCENARIOS_CONFIG = {}
+
+# ============================================================
+# STATE KHỞI TẠO
+# ============================================================
+INITIAL_STATE = "START"
+
+# ============================================================
+# LLM MODEL CONFIG
+# ============================================================
+GEMINI_MODEL = "gemini-1.5-flash"
+
+# --- NLU CONFIG ---
+# "RULE", "ML", "HYBRID"
+NLU_MODE_DEFAULT = "RULE"
+
+# Confidence tối thiểu để coi NLU hợp lệ
+NLU_CONFIDENCE_THRESHOLD = 0.50
+
+
+# --- RESPONSE GENERATOR CONFIG ---
+# "RULE", "ML", "HYBRID"
+RESPONSE_MODE_DEFAULT = "RULE"
+
+
+# --- SYSTEM INTEGRATION CONFIG ---
+# "REAL" hoặc "MOCK"
+SYSTEM_MODE_DEFAULT = "MOCK"
+
+# --- DATABASE MODE CONFIG ---
+# "REAL" hoặc "MOCK"
+DB_MODE_DEFAULT = "MOCK"
+
+
+# --- TTS CONFIG ---
+# "REAL" hoặc "MOCK"
+TTS_MODE_DEFAULT = "MOCK"
+
+# ============================================================
+# LLM CONFIG
+# ============================================================
+# AVAILABLE: "OFF", "LOCAL", "CLOUD"
+LLM_MODE_DEFAULT = "OFF"
+
+# ======================================================
+# EXPORT (cho import trực tiếp)
+# ======================================================
+__all__ = [
+    "PROJECT_NAME",
+    "DB_PATH",
+    "DB_NAME",
+    "DB_FOLDER",
+    "PAYMENT_TABLE_NAME",
+    "QR_STORAGE_DIR",
+    "QR_FILE_EXTENSION",
+    "QR_TEXT_TEMPLATE",
+    "LOG_FILE_PATH",
+    "ENABLE_CONSOLE_LOG",
+
+    "NLU_MODE_DEFAULT",
+    "NLU_CONFIDENCE_THRESHOLD",
+
+    "RESPONSE_MODE_DEFAULT",
+    "SYSTEM_MODE_DEFAULT",
+    "TTS_MODE_DEFAULT",
+
+    "DB_MODE_DEFAULT",
+    "LLM_MODE_DEFAULT",
+    "API_KEY",
+
+    # ✔ THÊM 3 BIẾN NÀY
+    "SCENARIOS_CONFIG",
+    "INITIAL_STATE",
+    "GEMINI_MODEL",
+
+]
