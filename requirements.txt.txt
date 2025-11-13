@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # === CORE BACKEND ===
 fastapi==0.115.0
 uvicorn[standard]==0.31.0
@@ -52,3 +53,59 @@ silero-vad==5.0.2
 # === DEV TOOLS ===
 black==24.8.0
 isort==5.13.2
+=======
+# === CORE BACKEND ===
+fastapi==0.115.0
+uvicorn[standard]==0.31.0
+starlette==0.38.2
+
+# === WEBRTC / AUDIO STREAMING ===
+aiortc==1.9.0
+av==11.0.0
+pyee==11.1.0
+sounddevice==0.4.7
+numpy==1.26.4
+torch==2.4.0
+torchaudio==2.4.0
+soundfile==0.12.1
+
+# === SPEECH TO TEXT / TEXT TO SPEECH ===
+transformers==4.45.0
+sentencepiece==0.2.0
+protobuf==5.28.0
+librosa==0.10.2.post1
+openai-whisper==20240918
+ffmpeg-python==0.2.0
+
+# === DATABASE LAYER ===
+SQLAlchemy==2.0.36
+pymysql==1.1.1
+databases==0.9.0
+
+# === AI/NLP / DIALOG MANAGEMENT ===
+scikit-learn==1.5.1
+nltk==3.9
+spacy==3.7.6
+
+# === QR CODE / PAYMENT MODULE ===
+qrcode==7.4.2
+Pillow==10.4.0
+
+# === UTILITIES / LOGGING / CONFIG ===
+python-dotenv==1.0.1
+requests==2.32.3
+aiofiles==24.1.0
+asyncio==3.4.3
+uuid==1.30
+typing_extensions>=4.11.0
+
+# === FRONTEND STATIC SERVE SUPPORT ===
+jinja2==3.1.4
+
+# === OPTIONAL (nếu có xử lý VAD hoặc STT nâng cao) ===
+silero-vad==5.0.2
+
+# === DEV TOOLS ===
+black==24.8.0
+isort==5.13.2
+>>>>>>> d957c982f899660a52cba8728118f4bbb190342c
