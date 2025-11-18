@@ -1,4 +1,3 @@
-# response_generator.py
 import time
 import os
 import random
@@ -6,9 +5,6 @@ import threading
 from typing import Optional, Dict, Any, List, Callable, Literal, AsyncGenerator
 import wave
 
-# ----------------------------
-# SAFE IMPORT/FALLBACK cho config_db
-# ----------------------------
 _FALLBACK_API_KEY = "MOCK_API_KEY"
 
 try:
@@ -19,167 +15,150 @@ except ImportError:
     TTS_VOICE_NAME_DEFAULT = "vi"
     API_KEY = _FALLBACK_API_KEY
 
-# Mock/Fallback gTTS
 try:
     from gtts import gTTS
 except ImportError:
     gTTS = None
-    
-# ======================================================
-# LỚP TTS CƠ SỞ VÀ MOCK
-# ======================================================
+
+# ========================================================
+# TTS BASE + MOCK
+# ========================================================
 
 class BaseTTS:
-    """Lớp cơ sở cho các công cụ Text-to-Speech (MOCK)."""
     def __init__(self, log_callback: Callable):
         self.log = log_callback
         self.is_ready = True
-        
+
     def generate(self, text: str, output_path: str) -> Optional[str]:
-        # Giả lập tạo file WAV (chỉ dùng cho chế độ file-based)
         try:
             with wave.open(output_path, 'wb') as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
                 wf.setframerate(16000)
-                # Giả lập 1 giây audio rỗng
-                wf.writeframes(b'\x00\x00' * 16000) 
-            self.log(f"🎵 [TTS Mock] Đã tạo file audio giả lập: {os.path.basename(output_path)}", "magenta")
+                wf.writeframes(b'\x00\x00' * 16000)
+            self.log(f"🎵 [TTS Mock] Đã tạo file audio giả lập: {os.path.basename(output_path)}")
             return output_path
         except Exception as e:
-            self.log(f"❌ [TTS Mock] Lỗi tạo file audio giả lập: {e}", "red")
+            self.log(f"❌ [TTS Mock] Lỗi: {e}")
             return None
-        
+
     def synthesize_stream(self, text: str) -> AsyncGenerator[bytes, None]:
-        """Giả lập streaming audio bytes (chunked)."""
         async def mock_stream():
-             # Giả lập stream 3 chunks
-             yield b'MOCK_AUDIO_CHUNK_1'
-             yield b'MOCK_AUDIO_CHUNK_2'
-             yield b'MOCK_AUDIO_CHUNK_3'
+            yield b"M1"
+            yield b"M2"
+            yield b"M3"
         return mock_stream()
-        
+
+
 class MockTTS(BaseTTS):
-    """Sử dụng BaseTTS Mock."""
     pass
 
-# ======================================================
+
+# ========================================================
 # RESPONSE GENERATOR
-# ======================================================
+# ========================================================
 
 class ResponseGenerator:
-    """
-    Tạo phản hồi, sử dụng LLM hoặc rule-based.
-    Cũng quản lý TTS Client.
-    """
-    # 🚨 FIX: Đảm bảo __init__ nhận đủ 6 tham số cần thiết
-    def __init__(self, log_callback: Callable, config: Dict[str, Any], llm_mode: str, tts_mode: str, db_mode: str, api_key: str):
+    def __init__(self, log_callback: Callable, config: Dict[str, Any],
+                 llm_mode: str, tts_mode: str, db_mode: str, api_key: str):
+
         self.log = log_callback
         self.config = config
         self.llm_mode = llm_mode
         self.tts_mode = tts_mode
         self.db_mode = db_mode
-        
-        # API Key cần được lưu trữ an toàn, sử dụng threading.local để hỗ trợ đồng thời.
-        self.api_key_var = threading.local()
-        self.api_key_var.value = api_key or API_KEY # Lấy từ tham số hoặc config_db/fallback
 
-        # Khởi tạo TTS Client
+        self.api_key_var = threading.local()
+
+        # ƯU TIÊN API KEY TỪ BACKEND
+        if api_key and api_key != _FALLBACK_API_KEY:
+            self.api_key_var.value = api_key
+        else:
+            self.api_key_var.value = API_KEY
+
+        self.log(f"[RG] API KEY INIT = {self.api_key_var.value}")
+
         self._initialize_tts_client()
 
-
+    # ========================================================
+    # INIT TTS
+    # ========================================================
     def _initialize_tts_client(self):
-        """Khởi tạo TTS client dựa trên self.tts_mode."""
-        if self.tts_mode == "MOCK":
+        mode = (self.tts_mode or "").upper()
+
+        if mode == "MOCK":
             self.tts_client = MockTTS(self.log)
-        else:
-            # Ở đây có thể tích hợp Google Cloud TTS/Gradio TTS hoặc các engine khác.
-            self.log(f"⚠️ [TTS] Chế độ TTS '{self.tts_mode}' không được hỗ trợ, sử dụng Mock TTS.", "yellow")
-            self.tts_client = MockTTS(self.log)
-            
-        self.log(f"🎵 [TTS] TTS Client đã khởi tạo thành công (Mode: {self.tts_mode}).", "magenta")
+            self.log("🎵 [TTS] Dùng MOCK.")
+            return
 
+        # fallback
+        self.log(f"⚠️ [TTS] Mode '{self.tts_mode}' không hỗ trợ → chuyển MOCK.")
+        self.tts_client = MockTTS(self.log)
 
-    # API công khai để lấy TTS client
-    @property
-    def tts_client(self):
-        return self._tts_client
-
-    @tts_client.setter
-    def tts_client(self, client):
-        self._tts_client = client
-
-
+    # ========================================================
+    # RULE-BASED RESPONSE
+    # ========================================================
     def _generate_with_rules(self, intent: str) -> Optional[str]:
-        """Tạo phản hồi dựa trên rule-based config."""
-        
-        # Tìm rule theo intent
-        for rule in self.config.get("rules", []):
+        rules = self.config.get("rules", [])
+        for rule in rules:
             if rule["intent"] == intent:
                 responses = rule.get("responses", [rule.get("response")])
-                if responses:
-                    return random.choice(responses)
-        
-        # Rule fallback cho no_match
+                return random.choice(responses)
+
+        # fallback rule no_match
         if intent != "no_match":
             return self._generate_with_rules("no_match")
-            
+
         return None
 
+    # ========================================================
+    # DB-BASED RESPONSE
+    # ========================================================
     def _generate_with_db_info(self, intent: str, db_result: Dict[str, Any]) -> Optional[str]:
-        """Tạo phản hồi chi tiết dựa trên kết quả DB."""
-        customer_data = db_result.get("customer_data")
-        product_data = db_result.get("product_data")
+        customer = db_result.get("customer_data")
+        product = db_result.get("product_data")
 
-        if intent == "query_customer_info" and customer_data:
-            return (
-                f"Thông tin khách hàng: **{customer_data['customer_name']}**."
-                f" Lần đặt hàng gần nhất: {customer_data['last_order']}."
-                f" Bạn cần hỗ trợ thêm về thông tin này không?"
-            )
-        
-        if intent == "query_product_info" and product_data:
-            discount = product_data.get("discount")
+        if intent == "query_customer_info" and customer:
+            return f"Khách hàng: {customer['customer_name']} — Lần đặt gần nhất: {customer['last_order']}."
+
+        if intent == "query_product_info" and product:
+            discount = product.get("discount")
             if discount and int(discount) > 0:
-                 return (
-                    f"Sản phẩm **{product_data['product_name']}** hiện có giá {product_data['price']}."
-                    f" Bạn sẽ được giảm giá {discount} phần trăm. Bạn có muốn đặt hàng ngay không?"
-                 )
-            else:
-                 return (
-                    f"Sản phẩm **{product_data['product_name']}** có giá {product_data['price']}. "
-                    f"Hiện sản phẩm này không có khuyến mãi nào đặc biệt. "
-                    f"Bạn có muốn tôi kiểm tra thông tin khác không?"
-                 )
-        
+                return f"Sản phẩm {product['product_name']} giá {product['price']} — Giảm {discount}%."
+            return f"Sản phẩm {product['product_name']} giá {product['price']} — Không giảm giá."
+
         return None
 
-    def _generate_with_llm_mock(self, llm_context: Dict[str, Any]) -> str:
-        """Giả lập tạo phản hồi ngôn ngữ tự nhiên bằng LLM."""
-        api_key = getattr(self.api_key_var, 'value', _FALLBACK_API_KEY)
-        
-        if not api_key or api_key == _FALLBACK_API_KEY:
-            return f"Tôi đã nhận được yêu cầu (**{llm_context['intent']}**). Vui lòng cung cấp API Key để sử dụng trí tuệ nhân tạo tạo phản hồi chi tiết hơn."
+    # ========================================================
+    # MOCK LLM
+    # ========================================================
+    def _generate_with_llm_mock(self, ctx: Dict[str, Any]) -> str:
+        key = getattr(self.api_key_var, "value", None)
 
-        try:
-            self.log(f"🗣️ [GEMINI MOCK] Phản hồi đã nhận (Mock LLM) với API Key: {llm_context['intent']}", color="blue")
-            db_info_str = ""
-            if llm_context['db_result'].get("customer_data"): db_info_str += f" | KH: {llm_context['db_result']['customer_data']['customer_name']}"
-            if llm_context['db_result'].get("product_data"): db_info_str += f" | SP: {llm_context['db_result']['product_data']['product_name']}"
-            
-            history_len = len(llm_context.get('history', []))
-            
+    # Nếu không có API key → phản hồi rõ ràng, KHÔNG rỗng
+        if not key or key == _FALLBACK_API_KEY:
             return (
-                 f"Đây là phản hồi LLM giả lập cho yêu cầu: '**{llm_context['user_text']}**'. "
-                 f"Trạng thái hiện tại: **{llm_context['current_state']}**."
-                 f" (Dữ liệu nền: {db_info_str}). "
-                 f"Lịch sử hội thoại: **{history_len} lượt**."
+                f"Tôi chưa có API key để sinh câu trả lời thông minh. "
+                f"Nhưng tôi vẫn có thể giúp bạn. Bạn đang muốn hỏi điều gì?"
             )
-        except Exception as e:
-            self.log(f"❌ [GEMINI MOCK] Lỗi tạo LLM Mock: {e}", "red")
-            return "Xin lỗi, đã xảy ra lỗi khi tạo phản hồi LLM."
-    
 
+        # Nếu user_text rỗng → tự sinh câu trả lời fallback
+        if not ctx.get("user_text"):
+            return (
+                "Tôi chưa nghe rõ bạn nói gì. "
+                "Bạn có thể nói lại một lần nữa không?"
+            )
+
+        # Mock LLM tử tế
+        return (
+            f"Tôi hiểu bạn đang nói: '{ctx['user_text']}'. "
+            f"Nhưng hiện tôi đang ở chế độ mô phỏng LLM."
+        )
+
+
+    # ========================================================
+    # RESPONSE ENGINE
+    # ========================================================
     def generate_response(
         self,
         user_text: str,
@@ -187,27 +166,72 @@ class ResponseGenerator:
         entities: Dict[str, Any],
         db_result: Dict[str, Any],
         current_state: str,
-        history: List[Dict[str, str]] = [] # ✅ Thêm tham số History
+        history: List[Dict[str, str]] = []
     ) -> str:
-        """Tạo phản hồi cuối cùng, ưu tiên Rule -> DB -> LLM."""
-        
-        # 1. Rule-based / Tĩnh
-        response = self._generate_with_rules(intent)
-        if response:
-            return response
 
-        # 2. DB-based / Chi tiết
-        response = self._generate_with_db_info(intent, db_result)
-        if response:
-            return response
-            
-        # 3. LLM-based / Ngôn ngữ tự nhiên (hoặc Mock)
-        llm_context = {
+        # RULE ENGINE
+        rule = self._generate_with_rules(intent)
+        if rule:
+            return rule
+
+        # DB ENGINE
+        db_resp = self._generate_with_db_info(intent, db_result)
+        if db_resp:
+            return db_resp
+
+        # Nếu intent = no_match → có câu trả lời riêng
+        if intent == "no_match":
+            return (
+                "Xin lỗi, tôi chưa hiểu ý bạn. "
+                "Bạn có thể nói rõ hơn không?"
+            )
+
+        # LLM fallback
+        ctx = {
             "user_text": user_text,
             "intent": intent,
             "entities": entities,
             "db_result": db_result,
             "current_state": current_state,
-            "history": history # Truyền History
+            "history": history,
         }
-        return self._generate_with_llm_mock(llm_context)
+
+        return self._generate_with_llm_mock(ctx)
+
+
+    # ========================================================
+    # ADAPTER CHO DIALOG MANAGER
+    # ========================================================
+    def generate(
+        self,
+        intent: str,
+        entities: Dict[str, Any],
+        db_data: Dict[str, Any],
+        logic_data: Dict[str, Any],
+        state: str,
+        scenario: str,
+        step_index: int,
+        api_key: str,
+        history: List[Dict[str, str]] = []
+    ) -> str:
+
+        # Update API KEY mỗi lần sinh response
+        if api_key and api_key != _FALLBACK_API_KEY:
+            self.api_key_var.value = api_key
+
+        self.log(f"[RG] API KEY ACTIVE = {self.api_key_var.value}")
+
+        # Nếu logic_manager đã trả bot_text → dùng luôn
+        if logic_data and logic_data.get("bot_text"):
+            return logic_data["bot_text"]
+
+        user_text = logic_data.get("user_text", "") if logic_data else ""
+
+        return self.generate_response(
+            user_text=user_text,
+            intent=intent,
+            entities=entities,
+            db_result=db_data,
+            current_state=state,
+            history=history,
+        )
