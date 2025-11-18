@@ -1,54 +1,106 @@
-# nlu_connector.py
+import json
+from typing import Dict, Any, Optional, Callable
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Callable
-import time
+import google.generativeai as genai
 
-# --- SAFE IMPORT CONFIG ---
-try:
-    from config_db import NLU_CONFIG
-except ImportError:
-    NLU_CONFIG = {"intents": []}
-    
-# ==================== BASE INTERFACE ====================
+
+# ========================================================
+# Interface chung
+# ========================================================
+
 class INLUClient(ABC):
-    """Interface cho các hệ thống NLU (thực hoặc mock)."""
     @abstractmethod
     def get_intent(self, text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         pass
-        
-# ==================== IMPLEMENTATION MOCK ====================
+
+
+# ========================================================
+# Mock NLU
+# ========================================================
+
 class NLUClientMock(INLUClient):
-    """Mock class cho NLU, nhận diện intent dựa trên keywords đơn giản."""
-    def __init__(self, log_callback: Callable, config: Dict[str, Any]):
+    def __init__(self, log_callback: Callable, config=None):
         self._log = log_callback
-        self.intents = config.get("intents", [])
-        self._log("⚠️ [NLU] Sử dụng NLUClient MOCK.")
+        self._log("⚠️ [NLU] Dùng MOCK.")
 
-    def get_intent(self, text: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        text_lower = text.lower().strip()
-        
-        for intent_data in self.intents:
-            intent_name = intent_data.get("intent_name")
-            keywords = intent_data.get("keywords", [])
-            
-            for keyword in keywords:
-                if keyword in text_lower:
-                    self._log(f"✅ [NLU MOCK] Đã tìm thấy intent: {intent_name} (Keyword: '{keyword}')")
-                    return {
-                        "intent": intent_name,
-                        "confidence": 0.99, 
-                        "entities": {}
-                    }
+    def get_intent(self, text: str, context=None):
+        self._log(f"[NLU MOCK] Nhận: {text}")
+        return {"intent": "no_match", "confidence": 0.0, "entities": {}}
 
-        self._log(f"❌ [NLU MOCK] Không tìm thấy intent khớp cho: '{text_lower[:20]}...'")
-        return {"intent": "no_match", "confidence": 0.00, "entities": {}}
 
-# ==================== FACTORY FUNCTION ====================
-def NLUClientFactory(mode: str, log_callback: Callable, config: Dict[str, Any]):
-    """Chọn client NLU dựa trên mode."""
+# ========================================================
+# Gemini LLM NLU
+# ========================================================
+
+class NLUClientLLM(INLUClient):
+    def __init__(self, log_callback: Callable, api_key: str):
+        self._log = log_callback
+
+        try:
+            genai.configure(api_key=api_key)
+            self.model = genai.GenerativeModel("gemini-pro")
+            self._log("🧠 [NLU] Dùng Gemini Pro.")
+        except Exception as e:
+            self._log(f"❌ [NLU Gemini ERROR] {e}")
+            self.model = None
+
+    def get_intent(self, text: str, context=None):
+        if not self.model:
+            return {"intent": "no_match", "confidence": 0.0, "entities": {}}
+
+        prompt = f"""
+        Phân tích câu sau và trả về JSON:
+        {{
+            "intent": "ten_intent",
+            "confidence": 0.0,
+            "entities": {{}}
+        }}
+        Câu: "{text}"
+        """
+
+        try:
+            raw = self.model.generate_content(prompt).text.strip()
+            return json.loads(raw)
+        except Exception as e:
+            self._log(f"❌ [NLU Gemini ERROR] {e}")
+            return {"intent": "no_match", "confidence": 0.0, "entities": {}}
+
+
+# ========================================================
+# Factory
+# ========================================================
+
+def NLUClientFactory(mode: str, log_callback: Callable, api_key=None):
+    mode = (mode or "").upper()
+
     if mode == "MOCK":
-        return NLUClientMock(log_callback, config)
-    # TODO: Thêm các chế độ khác (ví dụ: mode == "LLM" cho NLUClientLLM)
-    else:
-        log_callback(f"⚠️ [NLU] Chế độ NLU '{mode}' không được hỗ trợ. Dùng MOCK.")
-        return NLUClientMock(log_callback, config)
+        return NLUClientMock(log_callback)
+
+    if mode == "LLM":
+        return NLUClientLLM(log_callback, api_key)
+
+    log_callback(f"⚠️ [NLU] Mode không hỗ trợ: {mode}, dùng MOCK")
+    return NLUClientMock(log_callback)
+
+
+# ========================================================
+# ⚡⚡ CLASS QUAN TRỌNG NHẤT — GIỮ NGUYÊN IMPORT GỐC ⚡⚡
+# ========================================================
+
+class NLUModule:
+    """Wrapper chuẩn hóa theo kiến trúc ban đầu của dự án."""
+    def __init__(self, mode="MOCK", api_key=None, log_callback=print):
+        self._log = log_callback
+        self.mode = mode
+        self.api_key = api_key
+
+        self._log(f"[NLUModule] Init mode = {self.mode}")
+
+        self.client = NLUClientFactory(
+            mode=self.mode,
+            log_callback=self._log,
+            api_key=self.api_key
+        )
+
+    def get_intent(self, text: str, context=None):
+        return self.client.get_intent(text, context)

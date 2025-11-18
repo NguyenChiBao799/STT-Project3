@@ -106,3 +106,38 @@ class SystemIntegrationManager:
     # Proxy phương thức ghi Log mới
     def log_interaction(self, *args, **kwargs):
         return self.manager.log_interaction(*args, **kwargs)
+    # ============================================================
+    #  THÊM QUERY_DATA ĐỂ TƯƠNG THÍCH VỚI DIALOGMANAGER
+    # ============================================================
+    def query_data(self, intent: str, entities: Dict[str, Any]):
+        """
+        Chuẩn hóa interface cho DialogManager.
+        Tự động chọn hàm query phù hợp theo intent.
+        Giữ nguyên toàn bộ hệ thống, không đụng vào import.
+        """
+
+        try:
+            # --- Intent tra cứu khách hàng ---
+            if intent in ["tra_cuu_khach_hang", "customer_lookup", "check_customer"]:
+                customer_id = entities.get("customer_id") or entities.get("id")
+                if customer_id:
+                    return {
+                        "customer_data": self.query_external_customer_data(customer_id)
+                    }
+                return {"customer_data": None}
+
+            # --- Intent tra cứu sản phẩm ---
+            if intent in ["tra_cuu_san_pham", "product_lookup", "check_product"]:
+                sku = entities.get("product_sku") or entities.get("sku")
+                if sku:
+                    return {
+                        "product_data": self.query_internal_product_data(sku)
+                    }
+                return {"product_data": None}
+
+            # --- Mặc định: trả dict rỗng để tránh crash ---
+            return {}
+
+        except Exception as e:
+            # Không để crash DM — trả fallback
+            return {"error": str(e)}
