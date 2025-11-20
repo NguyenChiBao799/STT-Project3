@@ -5,7 +5,7 @@ import json
 import torch
 import numpy as np
 import soundfile as sf
-import librosa
+from scipy.signal import resample_poly
 from pathlib import Path
 from datetime import datetime
 from gtts import gTTS
