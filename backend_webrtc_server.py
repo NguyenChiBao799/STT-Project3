@@ -1,10 +1,11 @@
+print("⚡ RUNNING BACKEND FILE:", __file__)
 import asyncio
 import os
 import json
 import uuid
 import wave
 import numpy as np
-import librosa  # ✅ Dùng để resample
+from scipy.signal import resample_poly 
 import warnings
 from typing import Dict, Any, Optional, Callable
 from pathlib import Path
@@ -56,12 +57,9 @@ ICE_SERVERS = [
 
 processing_tasks: Dict[str, asyncio.Task] = {}
 
-<<<<<<< HEAD
 # ============================================================
 # APP KHỞI TẠO
 # ============================================================
-=======
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 app = FastAPI(title="STT Voice AI Backend (WebRTC + REST API)")
 
 app.add_middleware(
@@ -78,7 +76,6 @@ app.include_router(orders.router, prefix="/api")
 app.include_router(promotions.router, prefix="/api")
 app.include_router(payment.router, prefix="/api")
 
-<<<<<<< HEAD
 
 # ============================================================
 # LOGGING CHUẨN HOÁ (DÙNG CHO CẢ LOGICMANAGER & DM)
@@ -87,24 +84,25 @@ def log_info(message: str, color="white"):
     print(f"INFO:backend_webrtc_server:[{message}]")
 
 
-# ============================================================
-# 🔥 TÍCH HỢP LOGIC MANAGER + DIALOG MANAGER (ĐÃ FIX)
-# ============================================================
-# Lưu ý: Đặt sau log_info để tránh lỗi NameError
-logic_manager = LogicManager(log_callback=log_info)
-dialog_manager = DialogManager(log_callback=log_info)
+# 🔥 TÍCH HỢP LOGIC MANAGER + DIALOG MANAGER (ĐÚNG API KEY)
+logic_manager = LogicManager(
+    log_callback=log_info,
+    response_config={},        # hoặc load file config nếu bạn có
+    llm_mode="real",
+    tts_mode="real",
+    db_mode="real",
+    api_key=INTERNAL_API_KEY   # <-- FIX API KEY
+)
+
+dialog_manager = DialogManager(
+    log_callback=log_info,
+    mode="rtc"                 # nếu DM của bạn cần mode
+)
+
 
 # ============================================================
 # UTILITIES
 # ============================================================
-=======
-# ============================================================
-# UTILITIES
-# ============================================================
-def log_info(message: str, color="white"):
-    print(f"INFO:backend_webrtc_server:[{message}]")
-
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 def _write_wav_file_safe_helper(file_path_str: str, chunks: list[bytes], wav_params_tuple: tuple):
     with wave.open(file_path_str, 'wb') as wf:
         wf.setparams(wav_params_tuple)
@@ -113,10 +111,6 @@ def _write_wav_file_safe_helper(file_path_str: str, chunks: list[bytes], wav_par
     log_info(f"[WAV Writer] ✅ Ghi file thành công: {file_path_str}")
 
 WAV_PARAMS = (CHANNELS, SAMPLE_WIDTH, SAMPLE_RATE, 0, 'NONE', 'not compressed')
-<<<<<<< HEAD
-# ============================================================
-# HÀM XỬ LÝ AUDIO SAU GHI — ĐÃ SỬA HOÀN TOÀN & TÍCH HỢP MODULE MỚI
-=======
 
 # ============================================================
 # CLASS GHI ÂM AUDIO
@@ -150,17 +144,21 @@ class AudioFileRecorder:
                     packet = await self._track.recv()
                     audio_data_np = packet.to_ndarray()
 
+                    # Chuẩn hoá dtype
                     if audio_data_np.dtype == np.float32:
                         audio_data_np = (audio_data_np * 32767).astype(np.int16)
                     elif audio_data_np.dtype != np.int16:
                         audio_data_np = audio_data_np.astype(np.int16)
 
+                    # Convert stereo → mono
                     if len(audio_data_np.shape) > 1:
-                        audio_data_np = np.mean(audio_data_np, axis=1)
+                        audio_data_np = np.mean(audio_data_np, axis=1).astype(np.int16)
 
-                    audio_data_np = librosa.resample(audio_data_np.astype(np.float32), orig_sr=48000, target_sr=16000)
-                    audio_data_np = (audio_data_np * 32767).astype(np.int16)
+                    # 🚀 RESAMPLE REAL-TIME KHÔNG BLOCKING
+                    # 48k → 16k dùng polyphase filter (siêu nhanh)
+                    audio_data_np = resample_poly(audio_data_np, 1, 3).astype(np.int16)
 
+                    # Lưu chunk
                     self._chunks.append(audio_data_np.tobytes())
 
                 except InvalidStateError:
@@ -169,21 +167,33 @@ class AudioFileRecorder:
                     if not self._stop_event.is_set():
                         log_info(f"[Recorder] Lỗi nhận packet audio: {e}")
                     break
+
         except asyncio.CancelledError:
             log_info(f"[Recorder] 🛑 Task đọc track bị hủy.")
+
         finally:
             if not self._chunks:
                 if self._on_stop_callback and self._file_path:
                     self._on_stop_callback(None)
                 return
+
             try:
-                await asyncio.to_thread(_write_wav_file_safe_helper, str(self._file_path), self._chunks, WAV_PARAMS)
+                # Ghi WAV chuẩn
+                await asyncio.to_thread(
+                    _write_wav_file_safe_helper,
+                    str(self._file_path),
+                    self._chunks,
+                    WAV_PARAMS
+                )
+
                 if self._on_stop_callback:
                     self._on_stop_callback(str(self._file_path))
+
             except Exception as e:
                 log_info(f"[Recorder] ❌ Lỗi ghi file WAV: {e}")
                 if self._on_stop_callback:
                     self._on_stop_callback(None)
+
 
     def stop(self):
         log_info("[Recorder] 🛑 Dừng ghi âm.")
@@ -193,12 +203,10 @@ class AudioFileRecorder:
 
 # ============================================================
 # HÀM XỬ LÝ AUDIO SAU GHI
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 # ============================================================
 async def _process_audio_and_respond(session_id, dm_processor, pc, data_channel, record_file, api_key):
     try:
         if not record_file or not os.path.exists(record_file):
-<<<<<<< HEAD
             if data_channel:
                 data_channel.send(json.dumps({
                     "type": "error",
@@ -207,168 +215,137 @@ async def _process_audio_and_respond(session_id, dm_processor, pc, data_channel,
             log_info(f"[{session_id}] ⚠️ Bỏ qua: file audio None hoặc không tồn tại.")
             return
 
-        # ========================================================
-        # 1) Gửi file WAV vào pipeline WebRTC → ASR → User Text
-        # ========================================================
-=======
-            data_channel.send(json.dumps({
-                "type": "error",
-                "error": "Không có dữ liệu audio hoặc file không tồn tại."
-            }))
-            log_info(f"[{session_id}] ⚠️ Bỏ qua: file audio None hoặc không tồn tại.")
-            return
-
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
+        # === BẮT ĐẦU PIPELINE ===
         stream_generator = dm_processor.handle_rtc_session(
             record_file=Path(record_file),
             session_id=session_id,
             api_key=api_key
         )
 
+        # === DATA GIỮ LẠI ĐỂ TỔNG HỢP CUỐI ===
         audio_chunks_binary = []
         last_user_text = ""
-        text_data = {}
+        last_bot_text = ""
+        last_intent = ""
+        last_action = ""
+        last_payment_url = None
 
-        # ========================================================
-        # 2) Đọc từng frame từ pipeline RTC Stream Processor
-        # ========================================================
+        parser = STTLogParser(log_callback=log_info)
+
+        # ===========================
+        #   VÒNG LẶP NHẬN STREAM
+        # ===========================
         async for is_audio, data in stream_generator:
-<<<<<<< HEAD
-=======
-            if is_audio:
-                audio_chunks_binary.append(base64.b64decode(data) if isinstance(data, str) else data)
-            else:
-                text_data = data
-                if data_channel:
-                    data_channel.send(json.dumps({"type": "text_response_partial", **data}))
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 
-            # ----------------------------------------------------
-            # AUDIO STREAM → Lưu binary lại để tạo bot_audio
-            # ----------------------------------------------------
+            # --- AUDIO STREAM ---
             if is_audio:
                 audio_chunks_binary.append(
                     base64.b64decode(data) if isinstance(data, str) else data
                 )
                 continue
 
-            # ----------------------------------------------------
-            # TEXT STREAM → Đây mới là user_text từ ASR
-            # ----------------------------------------------------
-            user_text = data.get("user_text", "").strip()
-            last_user_text = user_text
+            # --- TEXT STREAM ASR ---
+            if "user_text" in data and data["user_text"].strip():
+                last_user_text = data["user_text"].strip()
 
-            # ====================================================
-            # 3) DÙNG PARSER → CHUẨN HOÁ DỮ LIỆU NLU
-            # ====================================================
-            parser = STTLogParser(log_callback=log_info)
-            nlu_json = parser.convert({
-                "text_response": {"user_text": user_text}
-            })
+            # --- PARSER ---
+            nlu_json = parser.convert({"text_response": {"user_text": last_user_text}})
 
-            # ====================================================
-            # 4) LOGIC MANAGER → XÁC ĐỊNH ACTION CẦN LÀM
-            # ====================================================
+            # --- LOGIC MANAGER ---
             decision = logic_manager.handle_nlu_result(nlu_json)
+            last_intent = decision.get("intent")
+            last_action = decision.get("action")
+            last_payment_url = decision.get("payment_url")
 
-            # ====================================================
-            # 5) DIALOG MANAGER → TẠO PHẢN HỒI HOÀN CHỈNH
-            # ====================================================
+            # --- DIALOG MANAGER ---
             final_response = dialog_manager.process_with_logic_manager(
                 nlu_json=nlu_json,
                 logic_manager=logic_manager
             )
 
-            bot_text = final_response.get("response_text") or final_response.get("text") or ""
+            # Lấy bot_text nếu có
+            bot_raw = final_response.get("response_text") or final_response.get("text")
+            if bot_raw and bot_raw.strip():
+                last_bot_text = bot_raw.strip()
 
-            text_data = {
-                "user_text": user_text,
-                "bot_text": bot_text,
-                "intent": decision.get("intent"),
-                "action": decision.get("action"),
-                "payment_url": decision.get("payment_url")
-            }
-
-            # ====================================================
-            # 6) Gửi phản hồi PARTIAL về WebRTC Client
-            # ====================================================
+            # Gửi TEXT PARTIAL cho UI
             if data_channel:
-                data_channel.send(json.dumps({"type": "text_response_partial", **text_data}))
+                data_channel.send(json.dumps({
+                    "type": "text_response_partial",
+                    "user_text": last_user_text,
+                    "bot_text": last_bot_text,
+                    "intent": last_intent,
+                    "action": last_action,
+                    "payment_url": last_payment_url
+                }))
 
-        # ========================================================
-        # 7) TẠO BOT AUDIO (WAV OUTPUT)
-        # ========================================================
+        # ===========================
+        #   TTS SAU KHI KẾT THÚC
+        # ===========================
         output_file_name = f"{session_id}_output.wav"
         output_file_path = os.path.join("temp", output_file_name)
 
-        if audio_chunks_binary:
-<<<<<<< HEAD
-            await asyncio.to_thread(
-                _write_wav_file_safe_helper,
-                output_file_path,
-                audio_chunks_binary,
-                WAV_PARAMS
-            )
-        else:
-            # Nếu không có audio TTS từ DM → dùng gTTS fallback
-            fallback_text = text_data.get("bot_text", "Xin lỗi, tôi không nghe rõ.")
-            gTTS(fallback_text, lang="vi").save(output_file_path)
+        user_spoken = last_user_text if last_user_text else "tôi không nghe rõ câu bạn nói"
+        bot_spoken = last_bot_text if last_bot_text else "Tôi xin lỗi, hiện tại tôi chưa tạo được câu trả lời."
 
-        # ========================================================
-        # 8) GHI LOG JSON RA FILE
-        # ========================================================
-=======
-            await asyncio.to_thread(_write_wav_file_safe_helper, output_file_path, audio_chunks_binary, WAV_PARAMS)
-        else:
-            fallback_text = text_data.get("bot_text", "Xin lỗi, tôi không nghe rõ.")
-            gTTS(fallback_text, lang="vi").save(output_file_path)
+        tts_text = f"Bạn vừa nói: {user_spoken}. Câu trả lời của tôi là: {bot_spoken}."
 
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
+        from pydub import AudioSegment
+
+        log_info(f"[🧠 [GTTS]] Tổng hợp văn bản FULL: '{tts_text[:80]}...'")
+
+        mp3_path = os.path.join("temp", f"{session_id}_tts.mp3")
+        wav_path = os.path.join("temp", f"{session_id}_output.wav")
+
+        # Tạo MP3 trước
+        gTTS(tts_text, lang='vi').save(mp3_path)
+
+        # Convert MP3 → WAV chuẩn PCM16 16kHz mono
+        audio = AudioSegment.from_mp3(mp3_path)
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        audio.export(wav_path, format="wav")
+
+        output_file_path = wav_path
+
+        log_info(f"[🎵 [GTTS]] Đã tạo file WAV PCM16 đầy đủ: {wav_path}")
+
+        # ===========================
+        #  GHI LOG JSON
+        # ===========================
         response_json_path = os.path.join("temp", f"{session_id}_response.json")
         with open(response_json_path, "w", encoding="utf-8") as jf:
             json.dump({
                 "session_id": session_id,
                 "input_file": record_file,
                 "output_audio": output_file_path,
-                "text_response": text_data
+                "user_text": user_spoken,
+                "bot_text": bot_spoken,
+                "intent": last_intent,
+                "action": last_action,
+                "payment_url": last_payment_url
             }, jf, ensure_ascii=False, indent=4)
 
-<<<<<<< HEAD
-        # ========================================================
-        # 9) GỬI END_OF_SESSION CHO WEBRTC CLIENT
-        # ========================================================
-=======
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
+        # ===========================
+        #  GỬI EVENT END SESSION
+        # ===========================
         if data_channel:
             data_channel.send(json.dumps({
                 "type": "end_of_session",
                 "bot_audio_path": f"/audio_files/{output_file_name}"
             }))
-<<<<<<< HEAD
 
-        log_info(f"[{session_id}] ✅ Xử lý audio xong. Phản hồi gửi về client.")
+        log_info(f"[{session_id}] ✅ Hoàn tất. Audio đầy đủ gửi về client.")
 
     except Exception as e:
         log_info(f"[{session_id}] ❌ Lỗi xử lý audio: {e}")
         traceback.print_exc()
+
 # ============================================================
 # ENDPOINT /offer — FULL CODE ĐÃ TÍCH HỢP MỚI
-=======
-
-    except Exception as e:
-        log_info(f"[{session_id}] ❌ Lỗi xử lý: {e}")
-        traceback.print_exc()
-    finally:
-        log_info(f"[{session_id}] ⚠️ Giữ lại file ghi âm đầu vào: {record_file}")
-
-# ============================================================
-# ENDPOINT /offer
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 # ============================================================
 @app.post("/offer")
 async def offer(request: Request):
     params = await request.json()
-<<<<<<< HEAD
 
     # WebRTC Offer từ client
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
@@ -379,6 +356,10 @@ async def offer(request: Request):
     # API Key (bằng key nội bộ trên backend)
     api_key = params.get("api_key", INTERNAL_API_KEY)
 
+    logic_manager.api_key = api_key
+    dialog_manager.api_key = api_key
+
+
     # =======================
     # Tạo cấu hình WebRTC ICE
     # =======================
@@ -388,14 +369,6 @@ async def offer(request: Request):
     pc = RTCPeerConnection(configuration=config)
 
     # Recorder — nhận track audio từ client
-=======
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-    session_id = params.get("session_id", str(uuid.uuid4()))
-    api_key = params.get("api_key", INTERNAL_API_KEY)
-
-    config = RTCConfiguration(iceServers=[RTCIceServer(urls=s["urls"]) for s in ICE_SERVERS])
-    pc = RTCPeerConnection(configuration=config)
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
     recorder = AudioFileRecorder(pc)
 
     # DataChannel holder
@@ -405,28 +378,25 @@ async def offer(request: Request):
     # Khi client mở DataChannel → giữ reference để gửi text_response
     # ==============================================================
     @pc.on("datachannel")
-    def on_datachannel(channel):
+    def on_datachannel(ch):
         nonlocal data_channel_holder
-        data_channel_holder = channel
-<<<<<<< HEAD
-        log_info(f"[{session_id}] 📡 DataChannel nhận: {channel.label}")
+        data_channel_holder = ch
+        log_info(f"[{session_id}] 📡 DataChannel nhận: {ch.label}")
 
-        @channel.on("message")
-        def on_message(message):
+        @ch.on("message")
+        async def handle_message(message):
             try:
                 data = json.loads(message)
+
+                # Khi frontend gửi STOP
                 if data.get("type") == "stop_recording":
+                    log_info(f"[{session_id}] 🛑 Nhận yêu cầu STOP RECORDING từ client")
                     recorder.stop()
+                    await asyncio.sleep(0)  # nhả event loop
+
             except Exception as e:
                 log_info(f"[{session_id}] ❌ Lỗi message handler: {e}")
-=======
 
-        @channel.on("message")
-        def on_message(message):
-            data = json.loads(message)
-            if data.get("type") == "stop_recording":
-                recorder.stop()
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 
     # ==============================================================
     # Khi client gửi audio track
@@ -440,7 +410,6 @@ async def offer(request: Request):
 
             # Bắt đầu ghi file WAV từ audio track
             recorder.start(track, path)
-<<<<<<< HEAD
 
             # Xử lý khi recorder dừng (gửi vào pipeline)
             recorder.on(
@@ -456,12 +425,6 @@ async def offer(request: Request):
                     )
                 )
             )
-=======
-            recorder.on("stop", lambda p: asyncio.create_task(
-                _process_audio_and_respond(session_id, RTCStreamProcessor(log_callback=log_info),
-                                           pc, data_channel_holder, p, api_key)
-            ))
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 
     # ==============================================================
     # SETUP OFFER — TRẢ ANSWER CHO CLIENT
@@ -470,7 +433,6 @@ async def offer(request: Request):
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-<<<<<<< HEAD
     return {
         "sdp": pc.localDescription.sdp,
         "type": pc.localDescription.type,
@@ -478,25 +440,16 @@ async def offer(request: Request):
     }
 # ============================================================
 # 📂 ENDPOINT: UPLOAD WAV FILE (DÙNG CHO TEST & DEBUG)
-=======
-# ============================================================
-# 📂 ENDPOINT: UPLOAD WAV FILE
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 # ============================================================
 @app.post("/api/upload_wav")
 async def upload_wav(file: UploadFile = File(...), api_key: str = Form(None)):
     """
-<<<<<<< HEAD
     📂 Endpoint: Tải file WAV lên backend để phân tích:
     → STT → Parser → LogicManager → DialogManager → Bot_text → Bot_audio
-=======
-    📂 Endpoint: Tải file WAV lên để backend phân tích.
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
     """
     try:
         os.makedirs("temp", exist_ok=True)
         session_id = str(uuid.uuid4())
-<<<<<<< HEAD
 
         # --------------------------------------------------------
         # 1) Lưu file WAV được upload vào thư mục temp
@@ -510,23 +463,15 @@ async def upload_wav(file: UploadFile = File(...), api_key: str = Form(None)):
         # --------------------------------------------------------
         # 2) Gửi file WAV vào pipeline WebRTC STT Processor
         # --------------------------------------------------------
-=======
-        temp_path = os.path.join("temp", f"{session_id}_uploaded.wav")
-
-        with open(temp_path, "wb") as f:
-            f.write(await file.read())
-
-        log_info(f"[UPLOAD] ✅ Đã nhận file: {file.filename} → {temp_path}")
-
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
         dm_processor = RTCStreamProcessor(log_callback=log_info)
         stream_gen = dm_processor.handle_rtc_session(
             record_file=Path(temp_path),
             session_id=session_id,
             api_key=api_key or INTERNAL_API_KEY,
         )
+        logic_manager.api_key = api_key or INTERNAL_API_KEY
+        dialog_manager.api_key = api_key or INTERNAL_API_KEY
 
-<<<<<<< HEAD
         last_user_text = ""
         audio_chunks_binary = []
         final_text_data = {}
@@ -567,6 +512,8 @@ async def upload_wav(file: UploadFile = File(...), api_key: str = Form(None)):
                 nlu_json=nlu_json,
                 logic_manager=logic_manager
             )
+            logic_manager.api_key = api_key
+            dialog_manager.api_key = api_key
 
             bot_text = final_response.get("response_text") or final_response.get("text") or ""
 
@@ -581,18 +528,26 @@ async def upload_wav(file: UploadFile = File(...), api_key: str = Form(None)):
         # --------------------------------------------------------
         # 7) GHI BOT AUDIO — nếu pipeline STT không trả âm thanh
         # --------------------------------------------------------
-        output_file = os.path.join("temp", f"{session_id}_output.wav")
+        from pydub import AudioSegment
 
-        if audio_chunks_binary:
-            await asyncio.to_thread(
-                _write_wav_file_safe_helper,
-                output_file,
-                audio_chunks_binary,
-                WAV_PARAMS
-            )
-        else:
-            fallback_text = final_text_data.get("bot_text", "Xin lỗi, tôi không nghe rõ.")
-            gTTS(fallback_text, lang="vi").save(output_file)
+        tts_text = (
+            f"Bạn vừa nói: {final_text_data.get('user_text', '')}. "
+            f"Câu trả lời của tôi là: {final_text_data.get('bot_text', '')}."
+        )
+
+        mp3_path = os.path.join("temp", f"{session_id}_tts.mp3")
+        wav_path = os.path.join("temp", f"{session_id}_output.wav")
+
+        # TTS → MP3
+        gTTS(tts_text, lang="vi").save(mp3_path)
+
+        # MP3 → WAV chuẩn PCM16
+        sound = AudioSegment.from_mp3(mp3_path)
+        sound = sound.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        sound.export(wav_path, format="wav")
+
+        output_file = wav_path
+
 
         # --------------------------------------------------------
         # 8) Chuẩn bị JSON trả về
@@ -609,61 +564,39 @@ async def upload_wav(file: UploadFile = File(...), api_key: str = Form(None)):
 
         log_info(f"[UPLOAD {session_id}] 🎯 Kết quả: {response['bot_text']}")
 
-=======
-        text_data = {}
-        audio_chunks = []
-
-        async for is_audio, data in stream_gen:
-            if is_audio:
-                audio_chunks.extend(data)
-            else:
-                text_data = data
-
-        output_file = os.path.join("temp", f"{session_id}_output.wav")
-        if audio_chunks:
-            await asyncio.to_thread(_write_wav_file_safe_helper, output_file, audio_chunks, WAV_PARAMS)
-
-        response = {
-            "session_id": session_id,
-            "user_text": text_data.get("user_text", ""),
-            "bot_text": text_data.get("bot_text", ""),
-            "bot_audio_path": f"/audio_files/{Path(output_file).name}" if os.path.exists(output_file) else None,
-        }
-
-        log_info(f"[UPLOAD] ✅ Phân tích xong: {response['bot_text']}")
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
         return JSONResponse(response)
 
     except Exception as e:
         log_info(f"[UPLOAD] ❌ Lỗi xử lý file WAV: {e}")
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
-<<<<<<< HEAD
 # ============================================================
 # STATIC ROUTES — SERVE AUDIO FILES & STATIC HTML
 # ============================================================
-# Thư mục temp → chứa WAV input/output + JSON log
-=======
+from fastapi.responses import FileResponse
 
-# ============================================================
-# STATIC ROUTES
-# ============================================================
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
-app.mount("/audio_files", StaticFiles(directory="temp"), name="audio_files")
+@app.get("/audio_files/{filename}")
+async def serve_audio_file(filename: str):
+    file_path = os.path.join("temp", filename)
+    return FileResponse(
+        file_path,
+        media_type="audio/wav",
+        headers={"Accept-Ranges": "none"}   # 🚫 Ngăn trình duyệt gửi Range requests
+    )
 
 # Thư mục static → chứa QR payment, HTML demo UI
-app.mount("/", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-<<<<<<< HEAD
+
 
 # ============================================================
 # MAIN ENTRY (CHẠY BẰNG PYTHON TRỰC TIẾP)
-=======
-# ============================================================
-# MAIN ENTRY
->>>>>>> d957c982f899660a52cba8728118f4bbb190342c
 # ============================================================
 if __name__ == "__main__":
     import uvicorn
     log_info("🚀 Backend WebRTC STT đang khởi động...")
     uvicorn.run(app, host="127.0.0.1", port=8000)
+print("\n==== ROUTES ====")
+for r in app.routes:
+    print(r.path, type(r))
+print("==== END ROUTES ====\n")
