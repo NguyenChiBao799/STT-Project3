@@ -82,6 +82,8 @@ app.include_router(payment.router, prefix="/api")
 # ============================================================
 def log_info(message: str, color="white"):
     print(f"INFO:backend_webrtc_server:[{message}]")
+from core.memory_trainer import MemoryTrainer
+memory_engine = MemoryTrainer(log_callback=log_info)
 
 
 # 🔥 TÍCH HỢP LOGIC MANAGER + DIALOG MANAGER (ĐÚNG API KEY)
@@ -324,6 +326,10 @@ async def _process_audio_and_respond(session_id, dm_processor, pc, data_channel,
                 "action": last_action,
                 "payment_url": last_payment_url
             }, jf, ensure_ascii=False, indent=4)
+            memory_engine.remember(response_json_path)
+            memory_engine.build_intent_dataset()
+            memory_engine.train_intent_classifier()
+
 
         # ===========================
         #  GỬI EVENT END SESSION
@@ -386,16 +392,28 @@ async def offer(request: Request):
         @ch.on("message")
         async def handle_message(message):
             try:
+                # Nếu là binary (PCM từ AudioWorklet) → bỏ qua không parse
+                if isinstance(message, (bytes, bytearray, memoryview)):
+                    return
+
+                # Nếu không phải string → bỏ qua
+                if not isinstance(message, str):
+                    return
+
+                # Nếu là JSON thật → xử lý bình thường
                 data = json.loads(message)
 
-                # Khi frontend gửi STOP
                 if data.get("type") == "stop_recording":
                     log_info(f"[{session_id}] 🛑 Nhận yêu cầu STOP RECORDING từ client")
                     recorder.stop()
-                    await asyncio.sleep(0)  # nhả event loop
+                    await asyncio.sleep(0)
 
             except Exception as e:
-                log_info(f"[{session_id}] ❌ Lỗi message handler: {e}")
+                # Chỉ log lỗi nếu message là string JSON
+                if isinstance(message, str):
+                    log_info(f"[{session_id}] ❌ Lỗi message handler: {e}")
+        return
+
 
 
     # ==============================================================
