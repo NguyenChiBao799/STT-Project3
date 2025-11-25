@@ -100,25 +100,57 @@ except Exception as e:
 # HELPER FUNCTIONS
 # =========================================================
 def _apply_silero_vad(audio_path: Path, log=_log_colored):
-    """Cắt bỏ đoạn im lặng bằng Silero VAD"""
-    if not VAD_IS_READY:
-        return librosa.load(audio_path, sr=SAMPLE_RATE)[0]
-
-    wav, sr = librosa.load(audio_path, sr=SAMPLE_RATE)
+    """
+    Cắt bỏ đoạn im lặng bằng Silero VAD, đảm bảo output dạng np.float32
+    """
     try:
-        speech_timestamps = utils.get_speech_timestamps(torch.tensor(wav), VAD_MODEL, sampling_rate=sr)
+        wav, sr = sf.read(audio_path)
+
+        # Stereo -> mono
+        if len(wav.shape) > 1:
+            wav = np.mean(wav, axis=1)
+
+        # Convert ngay lập tức để tránh float64 leak
+        wav = wav.astype(np.float32)
+
+        if not VAD_IS_READY:
+            log("[⚠️ VAD] Chưa ready → trả raw float32.", "yellow")
+            return wav
+
+        wav_t = torch.tensor(wav, dtype=torch.float32)
+
+        try:
+            speech_timestamps = utils.get_speech_timestamps(
+                wav_t, VAD_MODEL, sampling_rate=sr
+            )
+        except:
+            from silero_vad import utils as _vad_utils
+            speech_timestamps = _vad_utils.get_speech_timestamps(
+                wav_t, VAD_MODEL, sampling_rate=sr
+            )
+
+        if not speech_timestamps:
+            log("[VAD] Không thấy tiếng nói", "yellow")
+            return wav  # float32
+
+        start = speech_timestamps[0]["start"]
+        end   = speech_timestamps[-1]["end"]
+        vad_seg = wav[start:end]
+
+        if len(vad_seg) < 1600:
+            log("[VAD] Segment quá ngắn, fallback full wav", "yellow")
+            return wav  # float32
+
+        return vad_seg.astype(np.float32)
+
     except Exception as e:
-        log(f"[⚠️ [VAD]] Lỗi utils Silero: {e}", "yellow")
-        from silero_vad import utils as _vad_utils
-        speech_timestamps = _vad_utils.get_speech_timestamps(torch.tensor(wav), VAD_MODEL, sampling_rate=sr)
+        log(f"[❌ VAD ERROR] {e}", "red")
+        wav, _ = sf.read(audio_path)
+        if len(wav.shape) > 1:
+            wav = np.mean(wav, axis=1)
+        return wav.astype(np.float32)
 
-    if not speech_timestamps:
-        log(f"[VAD] Không phát hiện giọng nói trong {audio_path.name}.", "yellow")
-        return wav
 
-    start = speech_timestamps[0]["start"]
-    end = speech_timestamps[-1]["end"]
-    return wav[start:end]
 
 # =========================================================
 # ASR SERVICE (WHISPER)
