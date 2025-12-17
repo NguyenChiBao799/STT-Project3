@@ -131,20 +131,11 @@ Phù hợp cho chế độ **Legacy**, xử lý offline hoặc debug.
 
 ## 4. LƯU TRỮ DỮ LIỆU
 
-### 4.1. SQLite (WAL Mode)
-
 **Bảng \*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*\*****payments**:
 
 - `order_id` (Primary Key)
 - `amount`
 - `status` (PENDING / SUCCESS / FAILED)
-
-### 4.2. Bộ nhớ hội thoại
-
-- File `stt_memory.jsonl` lưu lịch sử tương tác
-- Phục vụ huấn luyện lại NLU và cải thiện độ chính xác
-
----
 
 ## 5. BẢO MẬT & XÁC THỰC
 
@@ -282,4 +273,5 @@ uvicorn backend_webrtc_server:app --host 0.0.0.0 --port 8000
 * Có thể đóng gói bằng Docker để triển khai
 
 **Phiên bản tài liệu**: v1.0
+
 
